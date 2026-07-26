@@ -1,0 +1,1 @@
+"""tests package — Bird Cam Agent test suite."""

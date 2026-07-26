@@ -1,0 +1,21 @@
+# Bird Cam Agent — Python dependencies
+# Core (required)
+pyyaml>=6.0
+Pillow>=9.0          # Image generation for mock camera mode
+
+# Web dashboard (optional but recommended)
+flask>=2.3,<4.0
+
+# SMS notifications (optional — install only the provider you use)
+# twilio>=8.0       # For Twilio SMS provider
+
+# Camera hardware (optional — install only on the Pi with hardware)
+# picamera2>=0.3     # For Raspberry Pi Camera Module (libcamera-based Pi OS)
+# picamera>=1.13     # For legacy Pi Camera Module (Buster and earlier)
+# opencv-python>=4.5 # For USB webcams
+
+# Hermes bridge (optional — only needed if using CLI mode)
+# Hermes Agent must be installed: curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+
+# Testing
+pytest>=7.0
