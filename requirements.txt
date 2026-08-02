@@ -14,6 +14,12 @@ flask>=2.3,<4.0
 # picamera>=1.13     # For legacy Pi Camera Module (Buster and earlier)
 # opencv-python>=4.5 # For USB webcams
 
+# Local bird classifier training (optional — install for training on workstation)
+# torch>=2.0         # PyTorch for training MobileNetV3
+# torchvision>=0.15  # Pre-trained weights and data transforms
+# onnx>=1.14         # ONNX export for Jetson inference
+# onnxruntime>=1.15  # ONNX Runtime for faster inference
+
 # Hermes bridge (optional — only needed if using CLI mode)
 # Hermes Agent must be installed: curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
 

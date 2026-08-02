@@ -5,7 +5,7 @@
 
 A bird feeder camera system that records, photographs, and identifies birds in real time on any Raspberry Pi. Powered by a [Hermes Agent](https://hermes-agent.nousresearch.com/) vision bridge and bursting with features that make your backyard feel like a living, breathing nature documentary.
 
-**49 modules. 554 tests. Zero subscription fees.**
+**51 modules. 555 tests. Zero subscription fees.**
 
 ---
 
@@ -114,7 +114,7 @@ python cli.py --mock capture   # Force mock mode for any command
 
 ---
 
-Complete Module List (49 Modules)
+Complete Module List (51 Modules)
 ---------------------------------
 
 ### Core (2 modules)
@@ -143,6 +143,13 @@ Complete Module List (49 Modules)
 | `modules/identifier.py` | Retry with backoff, confidence thresholding, history tracking |
 | `modules/bird_cache.py` | MD5-based identification result caching with TTL and stats |
 | `modules/confidence_calibrator.py` | Learns from user feedback to calibrate LLM confidence scores |
+
+### Local AI (2 modules)
+
+| Module | Description |
+|--------|-------------|
+| `modules/photo_dataset_builder.py` | Download bird photos from iNaturalist, CUB-200, and local archive for training |
+| `modules/local_bird_classifier.py` | Train/run MobileNetV3-Small (<50MB) for offline bird identification |
 
 ### Audio (5 modules)
 
@@ -253,6 +260,74 @@ write_rarity_file("data/rarity.yaml")
 ```
 
 Rarity levels: `common`, `uncommon`, `rare`, `very_rare`, `accidental`
+
+---
+
+Local AI Classifier (Offline)
+-----------------------------
+
+Train a **MobileNetV3-Small** bird identification model that runs entirely on your Jetson or Pi — no internet, no API calls, no subscription.
+
+| Approach | Speed | Size | Accuracy | Requires Network |
+|----------|-------|------|----------|----------------|
+| **Hermes bridge** (LLM vision) | ~2-5s/photo | N/A (cloud) | High (rare species) | Yes |
+| **Local classifier** (this module) | ~30ms/photo | ~5MB | Good (common species) | **No** |
+| **Two-tier** (recommended) | ~30ms + 2-5s fallback | ~5MB | Best of both | Only on fallback |
+
+### Training Workflow
+
+```bash
+# 1. Build dataset from iNaturalist + CUB-200 + your archive
+python -c "
+from modules.photo_dataset_builder import PhotoDatasetBuilder
+from core.config import DatasetBuilderConfig
+from modules.pnw_birds import SPECIES_DATA
+
+builder = PhotoDatasetBuilder(DatasetBuilderConfig(output_dir='data/training', mock_mode=False))
+builder.build_dataset(SPECIES_DATA)
+print(builder.get_dataset_stats())
+"
+
+# 2. Train the model (on a workstation with PyTorch)
+pip install torch torchvision
+python -m modules.local_bird_classifier train \
+    --dataset data/training \
+    --output-dir data/models \
+    --epochs 10
+
+# 3. Export to ONNX for faster Jetson inference
+python -m modules.local_bird_classifier export \
+    --model data/models/bird_classifier_mobilenet_v3_small.pth \
+    --labels data/models/bird_classifier_labels.pkl \
+    --output data/models/bird_classifier_mobilenet_v3_small.onnx
+```
+
+### Using the Classifier
+
+In `config.yaml`:
+
+```yaml
+local_classifier:
+  model_dir: "data/models"
+  model_name: "mobilenet_v3_small"
+  confidence_threshold: 0.7
+  mock_mode: false
+```
+
+The `BirdIdentifier` will use the local classifier first, and fall back to the Hermes bridge for low-confidence or unknown species.
+
+### How It Works
+
+1. **PhotoDatasetBuilder** downloads CC-licensed photos from iNaturalist (bulk), extracts matching classes from CUB-200-2011 (quality), and copies your own archive photos (real-world).
+2. **LocalBirdClassifier.train_model()** loads MobileNetV3-Small pre-trained on ImageNet, freezes the backbone, replaces the classifier head, and fine-tunes on your species.
+3. **ONNX export** converts to a format that ONNX Runtime runs ~2-3× faster on Jetson than PyTorch CPU.
+
+### Tips for Best Accuracy
+
+- Aim for 50–200 images per species
+- Include variation: different angles, distances, lighting
+- Your own feeder photos are the most valuable training data
+- If accuracy is low, increase epochs to 20–30 and lower learning_rate to 0.0005
 
 ---
 

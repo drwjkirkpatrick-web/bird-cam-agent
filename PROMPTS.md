@@ -496,24 +496,100 @@ Tests:
 
 ---
 
+## Phase 6: Local AI Training (Optional)
+
+### Prompt 6.1 — Photo Dataset Builder (`modules/photo_dataset_builder.py`)
+
+Download and curate bird photos from iNaturalist, CUB-200-2011, and local archive for training a local classifier.
+
+**File**: `modules/photo_dataset_builder.py`
+**Depends on**: core/config
+**Test**: `tests/test_photo_dataset_builder.py`
+
+Implement:
+- `PhotoDatasetBuilder` class:
+  - `__init__(self, config: DatasetBuilderConfig)` — stores config, initializes dedup hash set
+  - `build_dataset(species_list, sources) -> list[SpeciesDownloadResult]` — main entry point
+  - `_build_species(species, scientific_name, sources) -> SpeciesDownloadResult` — per-species download loop
+  - `_download_inaturalist(...)` — iNaturalist API with rate limiting, image validation
+  - `_download_cub200(...)` — Download/extract CUB-200 archive, match by species name
+  - `_copy_from_archive(...)` — Copy from PhotoOrganizer output directories
+  - `_save_image(url, dest_dir, result) -> bool` — download, validate, deduplicate, save
+  - `_copy_valid_image(src, dest_dir, result) -> bool` — copy local file with validation
+  - `_mock_download(...)` — create synthetic JPEGs for testing
+  - `get_dataset_stats() -> dict` — total images, species counts, minimum met
+  - `clean_dataset() -> int` — remove all files from output directory
+- `SpeciesDownloadResult` dataclass: species, downloaded, skipped_dup, invalid, errors, source_counts
+- Generic: accepts any species list (PNW, Kenya, custom)
+- Three sources: `inaturalist`, `cub200`, `archive`
+- Rate limiting (0.7s between iNaturalist requests), retry with backoff
+- Deduplication via MD5 hash across all sources
+- Image validation via Pillow
+- Mock mode creates synthetic images without network
+
+Tests:
+- Build creates species directories with images
+- Respects max_images_per_species
+- Returns SpeciesDownloadResult per species
+- Skips empty-name entries
+- Stats after build show correct counts
+- Clean removes all files
+- Mock mode creates synthetic images
+- Multi-source build with fake archive
+- Constants test for ALL_SOURCES
+
+### Prompt 6.2 — Local Bird Classifier (`modules/local_bird_classifier.py`)
+
+Lightweight MobileNetV3-Small classifier for offline bird identification.
+
+**File**: `modules/local_bird_classifier.py`
+**Depends on**: core/config, core/types
+**Test**: `tests/test_local_bird_classifier.py`
+
+Implement:
+- `LocalBirdClassifier` class:
+  - `__init__(self, config: LocalClassifierConfig)` — stores config, lazy-load model
+  - `load() -> bool` — load PyTorch or ONNX model + label map from disk
+  - `identify(photo_path) -> IdentificationResult` — classify image, return top-3 results
+  - `is_ready() -> bool` — model loaded?
+  - `get_supported_species() -> list[str]` — known class labels
+  - `_try_load_pytorch() -> bool` — load .pth checkpoint
+  - `_try_load_onnx() -> bool` — load .onnx with ONNX Runtime
+  - `_predict_pytorch(photo_path) -> IdentificationResult` — PyTorch inference
+  - `_predict_onnx(photo_path) -> IdentificationResult` — ONNX inference
+  - `_mock_identify(photo_path) -> IdentificationResult` — deterministic mock by filename hash
+  - `_create_model(num_classes) -> Any` — MobileNetV3-Small with fresh classifier head
+  - `TRAINING_DIRECTIONS` — embedded markdown with step-by-step training instructions
+- `@classmethod train_model(...)` — transfer learning with frozen backbone, 80/20 split
+- `@classmethod export_onnx(...)` — export trained model to ONNX
+- CLI entry point: `python -m modules.local_bird_classifier [train|export]`
+- Model <50MB (MobileNetV3-Small ~5MB)
+- Mock mode works without PyTorch
+
+Tests:
+- Mock load returns True
+- Mock identify returns valid IdentificationResult with alternatives
+- Missing photo returns Unknown
+- Supported species list populated
+- Deterministic mock by filename hash
+- Different files may yield different results
+- High/low confidence threshold tests
+- Training directions contain key steps
+- Load without model returns False
+- Identify without model returns Unknown
+- Config round-trip (to_dict/from_dict)
+
 ## Post-Build
 
-### Prompt 6.1 — README (`README.md`)
+### Prompt 7.1 — README (`README.md`)
 
-Write a comprehensive README with:
-- Project overview
-- Hardware requirements (all Pi models)
-- Installation instructions
-- Configuration guide
-- Usage (CLI commands)
-- Dashboard access
-- SMS setup (Twilio or Hermes gateway)
-- Rarity file format
-- Hermes bridge setup
-- Development / testing
-- Architecture diagram (plain ASCII)
+Update README with:
+- New module descriptions (Photo Dataset Builder, Local Bird Classifier)
+- Training workflow: build dataset → train → export ONNX
+- Comparison: Hermes bridge vs local classifier vs two-tier approach
+- Hardware note: training on workstation, inference on Jetson/Pi
 
-### Prompt 6.2 — Install Script (`scripts/install.sh`)
+### Prompt 7.2 — Install Script (`scripts/install.sh`)
 
 Shell script that:
 - Creates a virtual environment

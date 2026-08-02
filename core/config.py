@@ -139,6 +139,54 @@ class OrchestratorConfig:
 
 
 @dataclass(frozen=True)
+class DatasetBuilderConfig:
+    """Photo dataset builder configuration."""
+
+    output_dir: str = "data/training"
+    max_images_per_species: int = 200
+    min_images_per_species: int = 20
+    sources: list[str] = field(default_factory=lambda: ["inaturalist", "cub200", "archive"])
+    inaturalist_api_key: str = ""
+    inaturalist_per_page: int = 200
+    cub200_url: str = "https://data.caltech.edu/records/65de6-vp158/files/CUB_200_2011.tgz"
+    archive_photo_dir: str = "data/photos"  # where PhotoOrganizer stores photos
+    image_size: int = 224
+    mock_mode: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DatasetBuilderConfig":
+        known = {f for f in cls.__dataclass_fields__}
+        filtered = {k: v for k, v in data.items() if k in known}
+        return cls(**filtered)
+
+
+@dataclass(frozen=True)
+class LocalClassifierConfig:
+    """Local bird classifier training + inference configuration."""
+
+    model_dir: str = "data/models"
+    model_name: str = "mobilenet_v3_small"
+    num_epochs: int = 10
+    batch_size: int = 16
+    learning_rate: float = 0.001
+    image_size: int = 224
+    confidence_threshold: float = 0.7
+    mock_mode: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LocalClassifierConfig":
+        known = {f for f in cls.__dataclass_fields__}
+        filtered = {k: v for k, v in data.items() if k in known}
+        return cls(**filtered)
+
+
+@dataclass(frozen=True)
 class Config:
     """
     Top-level configuration for the Bird Cam Agent.
@@ -154,6 +202,8 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
+    dataset_builder: DatasetBuilderConfig = field(default_factory=DatasetBuilderConfig)
+    local_classifier: LocalClassifierConfig = field(default_factory=LocalClassifierConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -164,6 +214,8 @@ class Config:
             "database": self.database.to_dict(),
             "dashboard": self.dashboard.to_dict(),
             "orchestrator": self.orchestrator.to_dict(),
+            "dataset_builder": self.dataset_builder.to_dict(),
+            "local_classifier": self.local_classifier.to_dict(),
         }
 
     @classmethod
@@ -181,6 +233,12 @@ class Config:
             dashboard=DashboardConfig.from_dict(data.get("dashboard", {})),
             orchestrator=OrchestratorConfig.from_dict(
                 data.get("orchestrator", {})
+            ),
+            dataset_builder=DatasetBuilderConfig.from_dict(
+                data.get("dataset_builder", {})
+            ),
+            local_classifier=LocalClassifierConfig.from_dict(
+                data.get("local_classifier", {})
             ),
         )
 
@@ -221,4 +279,6 @@ __all__ = [
     "DatabaseConfig",
     "DashboardConfig",
     "OrchestratorConfig",
+    "DatasetBuilderConfig",
+    "LocalClassifierConfig",
 ]
