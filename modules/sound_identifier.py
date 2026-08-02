@@ -71,6 +71,7 @@ Include the scientific name if possible."""
                 - hermes_api_url: URL of the Hermes API server
                 - mock_mode: if True, return canned results (default True)
                 - confidence_threshold: minimum confidence to accept (default 0.5)
+                - local_audio_classifier: LocalAudioClassifier instance (optional)
         """
         config = config or {}
         self.hermes_api_url: str = config.get(
@@ -80,6 +81,7 @@ Include the scientific name if possible."""
         self.confidence_threshold: float = config.get(
             "confidence_threshold", 0.5
         )
+        self.local_audio_classifier = config.get("local_audio_classifier", None)
 
         # NOTE: Canned results cycle through 3 common North American
         #       songbirds for development and testing.
@@ -138,6 +140,10 @@ Include the scientific name if possible."""
 
         Never raises — always returns a valid dict. If the file is missing
         or identification fails, returns an "Unknown" non-bird result.
+
+        Two-tier strategy:
+            Tier 1: Local audio classifier (fast, offline)
+            Tier 2: Hermes bridge (cloud fallback)
         """
         if not os.path.exists(audio_path):
             logger.warning("Audio file not found: %s — returning unknown", audio_path)
@@ -147,6 +153,34 @@ Include the scientific name if possible."""
             self._add_to_history(result)
             return result
 
+        # ---- Tier 1: Local audio classifier ----
+        if self.local_audio_classifier is not None and self.local_audio_classifier.is_ready():
+            from core.types import IdentificationResult
+
+            audio_result: IdentificationResult = self.local_audio_classifier.identify(audio_path)
+            if audio_result.is_bird and audio_result.confidence >= self.confidence_threshold:
+                logger.debug(
+                    "Local audio classifier hit: %s (%.0f%%)",
+                    audio_result.species,
+                    audio_result.confidence * 100,
+                )
+                result = {
+                    "species": audio_result.species,
+                    "scientific_name": audio_result.scientific_name,
+                    "confidence": audio_result.confidence,
+                    "is_bird": audio_result.is_bird,
+                    "description": audio_result.description,
+                    "alternative_species": list(audio_result.alternative_species),
+                }
+                self._add_to_history(result)
+                return result
+            logger.debug(
+                "Local audio classifier miss/low-confidence: %s (%.0f%%), falling back",
+                audio_result.species,
+                audio_result.confidence * 100,
+            )
+
+        # ---- Tier 2: Hermes bridge / mock ----
         if self.mock_mode:
             result = self.mock_identify(audio_path)
         else:

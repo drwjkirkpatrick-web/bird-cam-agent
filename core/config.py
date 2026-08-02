@@ -187,6 +187,28 @@ class LocalClassifierConfig:
 
 
 @dataclass(frozen=True)
+class LocalAudioClassifierConfig:
+    """Local audio bird sound classifier training + inference configuration."""
+
+    model_dir: str = "data/models"
+    model_name: str = "cnn"
+    num_epochs: int = 20
+    batch_size: int = 16
+    learning_rate: float = 0.001
+    confidence_threshold: float = 0.7
+    mock_mode: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LocalAudioClassifierConfig":
+        known = {f for f in cls.__dataclass_fields__}
+        filtered = {k: v for k, v in data.items() if k in known}
+        return cls(**filtered)
+
+
+@dataclass(frozen=True)
 class Config:
     """
     Top-level configuration for the Bird Cam Agent.
@@ -204,6 +226,9 @@ class Config:
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     dataset_builder: DatasetBuilderConfig = field(default_factory=DatasetBuilderConfig)
     local_classifier: LocalClassifierConfig = field(default_factory=LocalClassifierConfig)
+    local_audio_classifier: LocalAudioClassifierConfig = field(
+        default_factory=LocalAudioClassifierConfig
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -216,6 +241,7 @@ class Config:
             "orchestrator": self.orchestrator.to_dict(),
             "dataset_builder": self.dataset_builder.to_dict(),
             "local_classifier": self.local_classifier.to_dict(),
+            "local_audio_classifier": self.local_audio_classifier.to_dict(),
         }
 
     @classmethod
@@ -239,6 +265,9 @@ class Config:
             ),
             local_classifier=LocalClassifierConfig.from_dict(
                 data.get("local_classifier", {})
+            ),
+            local_audio_classifier=LocalAudioClassifierConfig.from_dict(
+                data.get("local_audio_classifier", {})
             ),
         )
 
@@ -281,4 +310,5 @@ __all__ = [
     "OrchestratorConfig",
     "DatasetBuilderConfig",
     "LocalClassifierConfig",
+    "LocalAudioClassifierConfig",
 ]

@@ -5,7 +5,7 @@
 
 A bird feeder camera system that records, photographs, and identifies birds in real time on any Raspberry Pi. Powered by a [Hermes Agent](https://hermes-agent.nousresearch.com/) vision bridge and bursting with features that make your backyard feel like a living, breathing nature documentary.
 
-**51 modules. 555 tests. Zero subscription fees.**
+**52 modules. 571 tests. Zero subscription fees.**
 
 ---
 
@@ -38,7 +38,7 @@ Features at a Glance
 |----------|-------------|
 | **Camera** | Pi Camera, USB webcam, ESP32-CAM, DSLR, multi-angle, night vision, live stream |
 | **Identification** | Hermes Agent vision bridge with retry, caching, and confidence calibration |
-| **Audio** | Sound recording, sound identification, spectrograms, audio analysis, call library |
+| **Audio** | Sound recording, sound identification, spectrograms, audio analysis, call library, **local audio AI** |
 | **Alerts** | SMS (Twilio), WiFi (Telegram, Discord, email, webhook, MQTT), push (Pushover, Pushbullet, ntfy) |
 | **Analytics** | Species tracker, diversity metrics (Shannon/Simpson), migration tracking, feeder activity, daily/weekly/monthly reports |
 | **Bird Data** | Pacific Northwest (McIver State Park, 52 species) + Kenya (Nairobi NP, 51 species) databases |
@@ -110,12 +110,15 @@ python cli.py run              # Start the camera monitoring loop
 python cli.py capture          # Single photo + identification
 python cli.py identify <path>  # Identify a bird in an existing photo (two-tier: local → Hermes)
 python cli.py local-id <path>  # Identify using ONLY the local classifier
+python cli.py local-audio-id <path>  # Identify a bird from audio using ONLY the local audio classifier
 python cli.py dashboard        # Start the web dashboard only
 python cli.py stats            # Print sighting statistics
 python cli.py list             # List recent sightings
 python cli.py init             # Create a default config file
 python cli.py build-dataset    # Download photos for training (PNW, Kenya, custom)
 python cli.py train-classifier # Train MobileNetV3 on your dataset
+python cli.py train-audio-classifier --dataset data/audio_training # Train audio CNN on WAV clips
+python cli.py export-audio-onnx --model data/models/audio_classifier_cnn.pth ... # Export audio model to ONNX
 python cli.py test-sms         # Send a test SMS notification
 python cli.py health           # Check health of all subsystems (incl. local AI)
 python cli.py --version        # Show version
@@ -154,12 +157,13 @@ Complete Module List (51 Modules)
 | `modules/bird_cache.py` | MD5-based identification result caching with TTL and stats |
 | `modules/confidence_calibrator.py` | Learns from user feedback to calibrate LLM confidence scores |
 
-### Local AI (2 modules)
+### Local AI (3 modules)
 
 | Module | Description |
 |--------|-------------|
 | `modules/photo_dataset_builder.py` | Download bird photos from iNaturalist, CUB-200, and local archive for training |
-| `modules/local_bird_classifier.py` | Train/run MobileNetV3-Small (<50MB) for offline bird identification |
+| `modules/local_bird_classifier.py` | Train/run MobileNetV3-Small (<50 MB) for offline bird identification |
+| `modules/local_audio_classifier.py` | Train/run small CNN on log-mel spectrograms for offline bird sound identification |
 
 ### Audio (5 modules)
 
@@ -242,7 +246,7 @@ Complete Module List (51 Modules)
 | Module | Description |
 |--------|-------------|
 | `main.py` | BirdCamAgent orchestrator — full capture-to-alert pipeline |
-| `cli.py` | Command-line interface with 9 subcommands |
+| `cli.py` | Command-line interface with 12 subcommands |
 
 ---
 
@@ -281,8 +285,8 @@ Train a **MobileNetV3-Small** bird identification model that runs entirely on yo
 | Approach | Speed | Size | Accuracy | Requires Network |
 |----------|-------|------|----------|----------------|
 | **Hermes bridge** (LLM vision) | ~2-5s/photo | N/A (cloud) | High (rare species) | Yes |
-| **Local classifier** (this module) | ~30ms/photo | ~5MB | Good (common species) | **No** |
-| **Two-tier** (recommended) | ~30ms + 2-5s fallback | ~5MB | Best of both | Only on fallback |
+| **Local classifier** (this module) | ~30ms/photo | ~5 MB | Good (common species) | **No** |
+| **Two-tier** (recommended) | ~30ms + 2-5s fallback | ~5 MB | Best of both | Only on fallback |
 
 ### Training Workflow
 
@@ -338,6 +342,68 @@ The `BirdIdentifier` will use the local classifier first, and fall back to the H
 - Include variation: different angles, distances, lighting
 - Your own feeder photos are the most valuable training data
 - If accuracy is low, increase epochs to 20–30 and lower learning_rate to 0.0005
+
+---
+
+Local Audio Classifier (Offline)
+--------------------------------
+
+Train a **small CNN on log-mel spectrograms** for bird sound identification that runs entirely on your Jetson or Pi — no internet, no API calls, no subscription.
+
+| Approach | Speed | Size | Accuracy | Requires Network |
+|----------|-------|------|----------|----------------|
+| **Hermes bridge** (LLM audio) | ~3–8s/clip | N/A (cloud) | High (rare calls) | Yes |
+| **Local audio classifier** | ~50ms/clip | ~2–5 MB | Good (common calls) | **No** |
+| **Two-tier audio** (recommended) | ~50ms + 3–8s fallback | ~2–5 MB | Best of both | Only on fallback |
+
+### Training Workflow
+
+```bash
+# 1. Organize your WAV clips by species
+mkdir -p data/audio_training/american_robin data/audio_training/northern_cardinal
+# Copy or record .wav files into each folder
+
+# 2. Train the audio model (requires PyTorch)
+pip install torch
+python -m modules.local_audio_classifier train \
+    --dataset data/audio_training \
+    --output-dir data/models \
+    --epochs 20
+
+# 3. Export to ONNX for faster Jetson inference
+python -m modules.local_audio_classifier export \
+    --model data/models/audio_classifier_cnn.pth \
+    --labels data/models/audio_classifier_labels.pkl \
+    --output data/models/audio_classifier_cnn.onnx
+```
+
+### Using the Audio Classifier
+
+In `config.yaml`:
+
+```yaml
+local_audio_classifier:
+  model_dir: "data/models"
+  model_name: "cnn"
+  confidence_threshold: 0.7
+  mock_mode: false
+```
+
+The `SoundIdentifier` will automatically use the local audio classifier first, and fall back to the Hermes bridge for low-confidence or unknown species.
+
+### How It Works
+
+1. **Audio preprocessing**: WAV files are resampled to 16 kHz, truncated/padded to 5 s, then converted to log-mel spectrograms (64 mel bins). Uses librosa if installed; falls back to a pure-numpy STFT → mel filterbank implementation.
+2. **AudioCNN**: A small 3-layer conv network (~500K params) with adaptive average pooling to handle variable-length clips. Trains from scratch on your dataset.
+3. **ONNX export**: Converts to a format that ONNX Runtime runs ~2–3× faster on Jetson than PyTorch CPU.
+
+### Tips for Best Audio Accuracy
+
+- Aim for 30–100 clips per species (2–10 seconds each)
+- Include variation: different times of day, distances, background noise
+- Filter out clips with excessive wind or traffic noise
+- Balance your dataset: similar number of clips per species
+- If accuracy is low, increase epochs to 30–50 and reduce LR to 0.0005
 
 ---
 
@@ -408,7 +474,7 @@ Development
 # Install dependencies
 pip install -r requirements.txt
 
-# Run tests (554 tests, all pass in mock mode)
+# Run tests (571 tests, all pass in mock mode)
 python -m pytest tests/ -v
 
 # Run a specific test file
@@ -420,8 +486,8 @@ python -m pytest tests/test_hermes_bridge.py -v
 ```
 bird-cam-agent/
 +-- core/                    # Shared types and configuration
-+-- modules/                 # 49 functional modules
-+-- tests/                   # 554 tests (12 skip on non-Pi hardware)
++-- modules/                 # 52 functional modules
++-- tests/                   # 571 tests (12 skip on non-Pi hardware)
 +-- main.py                  # Orchestrator
 +-- cli.py                   # Command-line interface
 +-- PROMPTS.md               # Testable build prompts
@@ -443,7 +509,8 @@ Gap Analysis: How We Compare
 
 | Feature | Birdfy ($170+) | Bird Buddy ($200+) | BirdNET-Pi (free) | **Bird Cam Agent (free)** |
 |---------|:---:|:---:|:---:|:---:|
-| AI bird ID | Cloud (subscription) | Cloud (subscription) | Local ML (audio only) | **Hermes vision bridge** |
+| AI bird ID (vision) | Cloud (subscription) | Cloud (subscription) | No | **Local + Hermes vision** |
+| AI bird ID (audio) | No | No | **BirdNET (local)** | **Local CNN + Hermes audio** |
 | Camera capture | Yes | Yes | No (audio only) | **Yes** |
 | Live stream | Yes | Yes | No | **Yes** |
 | Night vision | Yes | Yes | No | **Yes (with IR control)** |
@@ -457,7 +524,7 @@ Gap Analysis: How We Compare
 | Time-lapse | Yes | Yes | No | **Yes (GIF + video)** |
 | Diversity metrics | No | No | No | **Shannon/Simpson/evenness** |
 | Migration tracking | No | No | No | **Yes** |
-| Audio ID | No | No (BirdNET) | Yes | **Yes (Hermes bridge)** |
+| Audio ID | No | No (BirdNET) | **Yes (local)** | **Yes (local + cloud)** |
 | Spectrogram | No | No | Yes | **Yes** |
 | Solar/battery monitor | Yes (built-in) | Yes (built-in) | No | **Yes (INA219)** |
 | Thermal management | N/A | N/A | No | **Yes (GPIO fan)** |

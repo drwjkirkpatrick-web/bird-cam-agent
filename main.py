@@ -100,6 +100,24 @@ class BirdCamAgent:
                     "Falling back to Hermes bridge only."
                 )
 
+        # Local audio classifier (optional — uses if model exists on disk)
+        self.local_audio_classifier = None
+        if getattr(self.config, "local_audio_classifier", None):
+            from modules.local_audio_classifier import LocalAudioClassifier
+
+            local_audio_clf = LocalAudioClassifier(self.config.local_audio_classifier)
+            if local_audio_clf.load():
+                self.local_audio_classifier = local_audio_clf
+                logger.info(
+                    "Local audio classifier ready (%d species)",
+                    len(local_audio_clf.get_supported_species()),
+                )
+            else:
+                logger.info(
+                    "Local audio classifier not available (run training first). "
+                    "Falling back to Hermes bridge for audio ID."
+                )
+
         self.identifier = BirdIdentifier(self.bridge, self.config, self.local_classifier)
 
         # Rarity Checker
@@ -297,10 +315,18 @@ class BirdCamAgent:
                 "species_count": len(self.local_classifier.get_supported_species()),
             }
 
+        local_audio_clf_info: dict[str, Any] = {"ready": False}
+        if self.local_audio_classifier is not None:
+            local_audio_clf_info = {
+                "ready": self.local_audio_classifier.is_ready(),
+                "species_count": len(self.local_audio_classifier.get_supported_species()),
+            }
+
         return {
             "camera": self.camera.get_camera_info(),
             "hermes_bridge": self.bridge.health_check(),
             "local_classifier": local_clf_info,
+            "local_audio_classifier": local_audio_clf_info,
             "database": {"healthy": True, "path": self.config.database.db_path},
             "rarity_checker": {
                 "species_count": self.rarity_checker.species_count,

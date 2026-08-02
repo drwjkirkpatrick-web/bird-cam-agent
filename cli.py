@@ -129,6 +129,52 @@ def create_parser() -> argparse.ArgumentParser:
         "--export-onnx", action="store_true", help="Also export to ONNX after training"
     )
 
+    # train-audio-classifier
+    train_audio_parser = subparsers.add_parser(
+        "train-audio-classifier", help="Train the local bird sound classifier"
+    )
+    train_audio_parser.add_argument(
+        "--dataset", "-d", required=True, help="Audio dataset directory (species subfolders of WAVs)"
+    )
+    train_audio_parser.add_argument(
+        "--output-dir", default="data/models", help="Where to save the trained model"
+    )
+    train_audio_parser.add_argument(
+        "--model-name", default="cnn", help="Model name tag for filenames"
+    )
+    train_audio_parser.add_argument(
+        "--epochs", type=int, default=20, help="Training epochs"
+    )
+    train_audio_parser.add_argument(
+        "--batch-size", type=int, default=16, help="Batch size"
+    )
+    train_audio_parser.add_argument(
+        "--lr", type=float, default=0.001, help="Learning rate"
+    )
+    train_audio_parser.add_argument(
+        "--export-onnx", action="store_true", help="Also export to ONNX after training"
+    )
+
+    # export-audio-onnx
+    export_audio_parser = subparsers.add_parser(
+        "export-audio-onnx", help="Export trained audio model to ONNX"
+    )
+    export_audio_parser.add_argument(
+        "--model", required=True, help="Path to trained .pth model"
+    )
+    export_audio_parser.add_argument(
+        "--labels", required=True, help="Path to .pkl label map"
+    )
+    export_audio_parser.add_argument(
+        "--output", required=True, help="Output .onnx path"
+    )
+
+    # local-audio-id
+    local_audio_parser = subparsers.add_parser(
+        "local-audio-id", help="Identify a bird from audio using only the local classifier (no Hermes)"
+    )
+    local_audio_parser.add_argument("audio_path", help="Path to the audio file")
+
     return parser
 
 
@@ -377,6 +423,85 @@ def cmd_train_classifier(args) -> None:
             print(f"  ONNX saved to: {onnx_result['output_path']} ({onnx_result['size_mb']:.1f} MB)")
 
 
+def cmd_train_audio_classifier(args) -> None:
+    """Train the local bird sound classifier on a prepared audio dataset."""
+    from modules.local_audio_classifier import LocalAudioClassifier
+
+    print(f"Training audio classifier on dataset: {args.dataset}")
+    ok = LocalAudioClassifier.train_model(
+        dataset_dir=args.dataset,
+        output_dir=args.output_dir,
+        model_name=args.model_name,
+        num_epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.lr,
+    )
+
+    if not ok:
+        print("Training failed. See logs for details.")
+        sys.exit(1)
+
+    model_path = os.path.join(
+        args.output_dir, f"audio_classifier_{args.model_name}.pth"
+    )
+    label_path = os.path.join(args.output_dir, "audio_classifier_labels.pkl")
+    print(f"\nTraining complete!")
+    print(f"  Model saved to: {model_path}")
+    print(f"  Label map saved to: {label_path}")
+
+    if args.export_onnx:
+        print("\nExporting to ONNX...")
+        onnx_path = model_path.replace(".pth", ".onnx")
+        ok = LocalAudioClassifier.export_onnx(
+            model_path=model_path,
+            labels_path=label_path,
+            output_path=onnx_path,
+        )
+        if ok:
+            print(f"  ONNX saved to: {onnx_path}")
+        else:
+            print("  ONNX export failed. See logs for details.")
+
+
+def cmd_export_audio_onnx(args) -> None:
+    """Export a trained audio model to ONNX."""
+    from modules.local_audio_classifier import LocalAudioClassifier
+
+    ok = LocalAudioClassifier.export_onnx(
+        model_path=args.model,
+        labels_path=args.labels,
+        output_path=args.output,
+    )
+    if ok:
+        print(f"ONNX exported to: {args.output}")
+    else:
+        print("ONNX export failed. See logs for details.")
+        sys.exit(1)
+
+
+def cmd_local_audio_id(agent, audio_path: str) -> None:
+    """Identify a bird from audio using only the local classifier (no Hermes fallback)."""
+    if (
+        agent.local_audio_classifier is None
+        or not agent.local_audio_classifier.is_ready()
+    ):
+        print("Local audio classifier is not available.")
+        print("Train a model first with: python cli.py train-audio-classifier")
+        agent.stop()
+        return
+
+    result = agent.local_audio_classifier.identify(audio_path)
+    if result.is_bird:
+        print(f"\n[Local Audio Classifier] Bird identified: {result.species}")
+        print(f"  Confidence: {result.confidence:.0%}")
+        print(f"  Description: {result.description}")
+        if result.alternative_species:
+            print(f"  Alternatives: {', '.join(result.alternative_species)}")
+    else:
+        print("[Local Audio Classifier] No bird detected (or confidence too low).")
+    agent.stop()
+
+
 def main() -> None:
     """CLI entry point."""
     parser = create_parser()
@@ -400,6 +525,14 @@ def main() -> None:
 
     if args.command == "train-classifier":
         cmd_train_classifier(args)
+        return
+
+    if args.command == "train-audio-classifier":
+        cmd_train_audio_classifier(args)
+        return
+
+    if args.command == "export-audio-onnx":
+        cmd_export_audio_onnx(args)
         return
 
     if not args.command:
@@ -427,6 +560,8 @@ def main() -> None:
         cmd_identify(agent, args.photo_path)
     elif args.command == "local-id":
         cmd_local_id(agent, args.photo_path)
+    elif args.command == "local-audio-id":
+        cmd_local_audio_id(agent, args.audio_path)
     elif args.command == "dashboard":
         cmd_dashboard(agent)
     elif args.command == "stats":
