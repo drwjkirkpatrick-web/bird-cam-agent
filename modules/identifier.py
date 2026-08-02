@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class BirdIdentifier:
     """
-    Coordinates bird identification via the Hermes vision bridge.
+    Coordinates bird identification via the Hermes vision bridge or a local classifier.
 
     Usage:
         bridge = HermesBridge(config.hermes_bridge)
@@ -32,14 +32,30 @@ class BirdIdentifier:
         result = identifier.identify("data/photos/bird_001.jpg")
         if result.is_bird and result.confidence > 0.7:
             print(f"High-confidence ID: {result.species}")
+
+    Two-tier identification (recommended):
+        1. Local classifier (fast, offline) — tries first
+        2. Hermes bridge (slow, cloud) — fallback for low-confidence or unknown
     """
 
-    def __init__(self, hermes_bridge: HermesBridge, config: Config):
+    def __init__(
+        self,
+        hermes_bridge: HermesBridge,
+        config: Config,
+        local_classifier=None,  # type: ignore  # LocalBirdClassifier, optional
+    ):
         self.bridge = hermes_bridge
         self.config = config
+        self.local_classifier = local_classifier
         self._history: list[IdentificationResult] = []
         self._max_history = 100
         self._confidence_threshold = config.hermes_bridge.confidence_threshold
+
+        if self.local_classifier is not None and self.local_classifier.is_ready():
+            logger.info(
+                "BirdIdentifier: local classifier ready (%d species)",
+                len(self.local_classifier.get_supported_species()),
+            )
 
     def identify(self, photo_path: str) -> IdentificationResult:
         """
@@ -69,14 +85,33 @@ class BirdIdentifier:
         self, photo_path: str, max_retries: int = 3
     ) -> IdentificationResult:
         """
-        Identify with exponential backoff retry on failure.
+        Identify with two-tier strategy: local classifier first, Hermes fallback.
 
-        NOTE: "Failure" means the bridge returns is_bird=False with
-              species="Unknown" and no description, which indicates a
-              transport error rather than a legitimate non-bird detection.
-              A genuine non-bird result (is_bird=False with a description)
-              is NOT retried.
+        Tier 1: Local classifier (fast, offline, ~30ms)
+        Tier 2: Hermes bridge (slow, cloud, ~2-5s)
+
+        Falls back to Hermes when:
+          - local classifier is not loaded
+          - confidence below threshold
+          - species not in local model's label set
         """
+        # ---- Tier 1: Local classifier ----
+        if self.local_classifier is not None and self.local_classifier.is_ready():
+            result = self.local_classifier.identify(photo_path)
+            if result.is_bird and result.confidence >= self._confidence_threshold:
+                logger.debug(
+                    "Local classifier hit: %s (%.0f%%)",
+                    result.species,
+                    result.confidence * 100,
+                )
+                return result
+            logger.debug(
+                "Local classifier miss/low-confidence: %s (%.0f%%), falling back",
+                result.species,
+                result.confidence * 100,
+            )
+
+        # ---- Tier 2: Hermes bridge ----
         last_result = None
         for attempt in range(max_retries):
             result = self.bridge.identify_bird(photo_path)

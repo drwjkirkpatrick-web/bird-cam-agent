@@ -57,6 +57,12 @@ def create_parser() -> argparse.ArgumentParser:
     )
     identify_parser.add_argument("photo_path", help="Path to the photo file")
 
+    # local-id
+    local_id_parser = subparsers.add_parser(
+        "local-id", help="Identify a bird using only the local classifier (no Hermes)"
+    )
+    local_id_parser.add_argument("photo_path", help="Path to the photo file")
+
     # dashboard
     subparsers.add_parser("dashboard", help="Start the web dashboard only")
 
@@ -80,6 +86,48 @@ def create_parser() -> argparse.ArgumentParser:
 
     # health
     subparsers.add_parser("health", help="Check health of all subsystems")
+
+    # build-dataset
+    build_parser = subparsers.add_parser(
+        "build-dataset", help="Build photo dataset from iNaturalist, CUB-200, and archive"
+    )
+    build_parser.add_argument(
+        "--species", "-s", default="pnw", choices=["pnw", "kenya", "custom"],
+        help="Which species list to use (default: pnw)"
+    )
+    build_parser.add_argument(
+        "--output", "-o", default="data/training", help="Output directory for dataset"
+    )
+    build_parser.add_argument(
+        "--max-per-species", type=int, default=200, help="Max images per species"
+    )
+    build_parser.add_argument(
+        "--sources", nargs="+", default=["inaturalist", "cub200", "archive"],
+        help="Sources to use (default: all)"
+    )
+
+    # train-classifier
+    train_parser = subparsers.add_parser(
+        "train-classifier", help="Train the local bird classifier"
+    )
+    train_parser.add_argument(
+        "--dataset", "-d", default="data/training", help="Dataset directory"
+    )
+    train_parser.add_argument(
+        "--output-dir", default="data/models", help="Where to save the trained model"
+    )
+    train_parser.add_argument(
+        "--epochs", type=int, default=10, help="Training epochs"
+    )
+    train_parser.add_argument(
+        "--batch-size", type=int, default=16, help="Batch size"
+    )
+    train_parser.add_argument(
+        "--lr", type=float, default=0.001, help="Learning rate"
+    )
+    train_parser.add_argument(
+        "--export-onnx", action="store_true", help="Also export to ONNX after training"
+    )
 
     return parser
 
@@ -123,6 +171,26 @@ def cmd_identify(agent, photo_path: str) -> None:
             print(f"  ** RARE BIRD **")
     else:
         print("No bird detected in this photo.")
+    agent.stop()
+
+
+def cmd_local_id(agent, photo_path: str) -> None:
+    """Identify a bird using only the local classifier (no Hermes fallback)."""
+    if agent.local_classifier is None or not agent.local_classifier.is_ready():
+        print("Local classifier is not available.")
+        print("Train a model first with: python cli.py train-classifier")
+        agent.stop()
+        return
+
+    result = agent.local_classifier.identify(photo_path)
+    if result.is_bird:
+        print(f"\n[Local Classifier] Bird identified: {result.species}")
+        print(f"  Confidence: {result.confidence:.0%}")
+        print(f"  Description: {result.description}")
+        if result.alternative_species:
+            print(f"  Alternatives: {', '.join(result.alternative_species)}")
+    else:
+        print("[Local Classifier] No bird detected (or confidence too low).")
     agent.stop()
 
 
@@ -214,6 +282,10 @@ def cmd_health(agent) -> None:
     bridge_status = "healthy" if bridge_info.get("healthy") else "unhealthy"
     print(f"Hermes:     {bridge_status} ({bridge_info.get('mode', 'unknown')})")
 
+    local_info = health.get("local_classifier", {})
+    local_status = "ready" if local_info.get("ready") else "not ready"
+    print(f"Local AI:   {local_status} ({local_info.get('species_count', 0)} species)")
+
     db_info = health.get("database", {})
     print(f"Database:   {db_info.get('path', 'unknown')}")
 
@@ -225,6 +297,84 @@ def cmd_health(agent) -> None:
 
     print(f"SMS sent:   {health.get('sms_sent_count', 0)} alerts")
     agent.stop()
+
+
+def cmd_build_dataset(args) -> None:
+    """Build a photo dataset for training the local classifier."""
+    from core.config import DatasetBuilderConfig
+    from modules.photo_dataset_builder import PhotoDatasetBuilder
+
+    # Select species list
+    if args.species == "pnw":
+        from modules.pnw_birds import SPECIES_DATA
+
+        species_list = [{"name": s["name"], "scientific_name": s["scientific_name"]} for s in SPECIES_DATA]
+        print(f"Using Pacific Northwest species list ({len(species_list)} species)")
+    elif args.species == "kenya":
+        from modules.kenya_birds import SPECIES_DATA
+
+        species_list = [{"name": s["name"], "scientific_name": s["scientific_name"]} for s in SPECIES_DATA]
+        print(f"Using Kenya species list ({len(species_list)} species)")
+    else:
+        print("Custom species list: provide a JSON file path via --species-file (not yet implemented)")
+        print("Use --species pnw or --species kenya for built-in lists.")
+        return
+
+    config = DatasetBuilderConfig(
+        output_dir=args.output,
+        max_images_per_species=args.max_per_species,
+        sources=args.sources,
+        mock_mode=False,
+    )
+    builder = PhotoDatasetBuilder(config)
+    results = builder.build_dataset(species_list)
+    stats = builder.get_dataset_stats()
+
+    print(f"\nDataset built: {stats['output_dir']}")
+    print(f"  Total species: {stats['total_species']}")
+    print(f"  Total images:  {stats['total_images']}")
+    print(f"  Species with ≥{stats['min_required']} images: {stats['species_with_minimum']}")
+    print(f"\nBreakdown:")
+    for slug, count in sorted(stats["species_breakdown"].items(), key=lambda x: -x[1])[:10]:
+        print(f"  {slug:30s} {count:4d} images")
+    if len(stats["species_breakdown"]) > 10:
+        print(f"  ... and {len(stats['species_breakdown']) - 10} more")
+
+
+def cmd_train_classifier(args) -> None:
+    """Train the local bird classifier on a prepared dataset."""
+    from modules.local_bird_classifier import LocalBirdClassifier
+
+    print(f"Training classifier on dataset: {args.dataset}")
+    result = LocalBirdClassifier.train_model(
+        dataset_dir=args.dataset,
+        output_dir=args.output_dir,
+        num_epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.lr,
+    )
+
+    if "error" in result:
+        print(f"Training failed: {result['error']}")
+        sys.exit(1)
+
+    print(f"\nTraining complete!")
+    print(f"  Best validation accuracy: {result['best_val_accuracy']:.1f}%")
+    print(f"  Model saved to: {result['model_path']}")
+    print(f"  Label map saved to: {result['label_path']}")
+    print(f"  Classes: {result['num_classes']}")
+
+    if args.export_onnx:
+        print("\nExporting to ONNX...")
+        onnx_result = LocalBirdClassifier.export_onnx(
+            model_path=result["model_path"],
+            label_path=result["label_path"],
+            output_path=result["model_path"].replace(".pth", ".onnx"),
+        )
+        if "error" in onnx_result:
+            print(f"ONNX export failed: {onnx_result['error']}")
+        else:
+            print(f"  ONNX saved to: {onnx_result['output_path']} ({onnx_result['size_mb']:.1f} MB)")
 
 
 def main() -> None:
@@ -242,6 +392,14 @@ def main() -> None:
     # Handle commands that don't need an agent
     if args.command == "init":
         cmd_init(args)
+        return
+
+    if args.command == "build-dataset":
+        cmd_build_dataset(args)
+        return
+
+    if args.command == "train-classifier":
+        cmd_train_classifier(args)
         return
 
     if not args.command:
@@ -267,6 +425,8 @@ def main() -> None:
         cmd_capture(agent)
     elif args.command == "identify":
         cmd_identify(agent, args.photo_path)
+    elif args.command == "local-id":
+        cmd_local_id(agent, args.photo_path)
     elif args.command == "dashboard":
         cmd_dashboard(agent)
     elif args.command == "stats":

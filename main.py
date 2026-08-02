@@ -85,7 +85,22 @@ class BirdCamAgent:
         from modules.identifier import BirdIdentifier
 
         self.bridge = HermesBridge(self.config.hermes_bridge)
-        self.identifier = BirdIdentifier(self.bridge, self.config)
+
+        # Local classifier (optional — uses if model exists on disk)
+        self.local_classifier = None
+        if getattr(self.config, "local_classifier", None):
+            from modules.local_bird_classifier import LocalBirdClassifier
+
+            local_clf = LocalBirdClassifier(self.config.local_classifier)
+            if local_clf.load():
+                self.local_classifier = local_clf
+            else:
+                logger.info(
+                    "Local classifier not available (run training first). "
+                    "Falling back to Hermes bridge only."
+                )
+
+        self.identifier = BirdIdentifier(self.bridge, self.config, self.local_classifier)
 
         # Rarity Checker
         from modules.rarity_checker import RarityChecker
@@ -275,9 +290,17 @@ class BirdCamAgent:
 
     def health_check(self) -> dict[str, Any]:
         """Check health of all subsystems."""
+        local_clf_info: dict[str, Any] = {"ready": False}
+        if self.local_classifier is not None:
+            local_clf_info = {
+                "ready": self.local_classifier.is_ready(),
+                "species_count": len(self.local_classifier.get_supported_species()),
+            }
+
         return {
             "camera": self.camera.get_camera_info(),
             "hermes_bridge": self.bridge.health_check(),
+            "local_classifier": local_clf_info,
             "database": {"healthy": True, "path": self.config.database.db_path},
             "rarity_checker": {
                 "species_count": self.rarity_checker.species_count,

@@ -83,6 +83,13 @@ bash scripts/install.sh
 # Initialize a config file
 python cli.py init
 
+# Build a training dataset (PNW birds)
+python cli.py build-dataset --species pnw --output data/training
+
+# Train the local classifier (requires PyTorch)
+pip install torch torchvision
+python cli.py train-classifier --dataset data/training --epochs 10 --export-onnx
+
 # Run a single capture (mock mode — no hardware needed)
 python cli.py capture
 
@@ -101,13 +108,16 @@ CLI Commands
 ```bash
 python cli.py run              # Start the camera monitoring loop
 python cli.py capture          # Single photo + identification
-python cli.py identify <path>  # Identify a bird in an existing photo
+python cli.py identify <path>  # Identify a bird in an existing photo (two-tier: local → Hermes)
+python cli.py local-id <path>  # Identify using ONLY the local classifier
 python cli.py dashboard        # Start the web dashboard only
 python cli.py stats            # Print sighting statistics
 python cli.py list             # List recent sightings
 python cli.py init             # Create a default config file
+python cli.py build-dataset    # Download photos for training (PNW, Kenya, custom)
+python cli.py train-classifier # Train MobileNetV3 on your dataset
 python cli.py test-sms         # Send a test SMS notification
-python cli.py health           # Check health of all subsystems
+python cli.py health           # Check health of all subsystems (incl. local AI)
 python cli.py --version        # Show version
 python cli.py --mock capture   # Force mock mode for any command
 ```
